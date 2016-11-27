@@ -1,0 +1,10 @@
+改root密码：
+1.grub按e进入编辑模式
+2.找到linux 16那一行，将ro改为rw init=/sysroot/bin/sh
+3.按下 Control+x ，使用单用户模式启动
+4.使用一系列命令修改root密码：
+	chroot /sysroot
+	passwd root
+	touch /.autorelabel
+	exit
+	reboot
