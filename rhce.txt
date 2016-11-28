@@ -1,0 +1,218 @@
+三台虚拟机-example.com域-172.25.0.0/24
+
+
+2.
+firewall-cmd --permanent --add-service=ssh
+firewall-cmd --permanent --add-rich-rule 'rule family=ipv4 source address=172.17.10.0/24 service name=ssh reject'
+firewall-cmd --reload
+
+3.
+nm-connection-editor 手动修改ipv6地址
+nmcli connection reload
+nmcli connection up eth0
+
+4.
+创建team类型的网卡，连接别名为team0,使用的模式为activebackup
+nmcli con add type team con-name team0 ifname team0 config '{"runner":{"name":"activebackup"}}'
+根据题目要求给team0网卡绑定指定的IP
+nmcli con mod team0 ipv4.addresses '192.168.0.101/24'
+nmcli con mod team0 ipv4.method manual
+给team0网卡指定从接口
+nmcli con add type team-slave con-name team0-port1 ifname eth1 master team0
+nmcli con add type team-slave con-name team0-port1 ifname eth2 master team0
+验证
+teamdctl team0 state
+ping 192.168.0.254
+
+5.
+vi /etc/bashrc
+alias qstat='/bin/ps -Ao pid,tt,fname,rsz'
+source /etc/bashrc
+
+6.
+安装postfix
+# yum install postfix -y
+# systemctl enable postfix
+修改/etc/postfix/main.cf配置
+# postconf  -e "inet_interfaces = loopback-only"
+# postconf -e "myorigin = example.com"
+# postconf -e "relayhost = [classroom.example.com]"  <--中心邮件服务器
+# postconf -e "mydestination = "（这步没有执行，也通过，不知道什么意思）
+# postconf -e "local_transport = error: local delivery disabled"
+# postconf  -e "mynetworks = 127.0.0.0/8, [::1]/128"
+修改了配置就重启
+# systemctl restart postfix
+配置完成，使用mail命令发送一封邮件测试
+# mail -s "server0 null client" student@classroom.example.com
+null client test
+
+7.
+# firewall-cmd --permanent  --add-rich-rule='rule family=ipv4 source address=172.25.0.0/24 forward-port port=5423 protocol=tcp to-port=80'
+# firewall-cmd --permanent  --add-rich-rule='rule family=ipv4 source address=172.25.0.0/24 forward-port port=5423 protocol=udp to-port=80'
+# firewall-cmd  --reload
+
+8.
+安装samba，创建共享目录
+# yum install samba samba-client -y
+# mkdir -p /common
+创建用户
+# useradd -s /sbin/nologin  brian
+# smbpasswd -a brian 输入密码redhat
+# useradd -s /sbin/nologin rob
+# smbpasswd -a rob 输入密码redhat
+修改目录属组
+# chgrp brain /common <---如果题目并没有要求让brain用户读写,则不需要修改组
+# chmod 2775 /common  <---确保brain用户对目录可读写
+修改selinux？
+# semanage fcontext -a -t samba_share_t '/common(/.*)?'
+# restorecon -vFR /common
+修改samba配置文件
+# vim /etc/samba/smb.conf
+...
+workgroup = STAFF  # 注意按照题目要求修改工作组
+...
+security = user  # 确定是user
+passdb backend = tdbsam
+[common]
+path = /common
+write list = brain
+开启samba服务
+# systemctl enable  smb
+# systemctl enable  nmb
+# systemctl start smb
+# systemctl start nmb
+修改防火墙策略
+# firewall-cmd --permanent --add-service=samba
+# firewall-cmd --reload
+
+9.
+安装cifs
+# yum -y install cifs-utils
+# mkdir /mnt/multiuser
+配置文件
+# echo 'username=brian' >/root/smb-multiuser.txt
+# echo 'password=redhat' >>/root/smb-multiuser.txt
+
+# vim /etc/fstab
+...
+//server0/common /mnt/multiuser cifs   credentials=/root/smb-multiuser.txt,multiuser,sec=ntlmssp 0 0
+
+# mount /mnt/multiuser
+验证
+# su - brian
+$ cifscreds add server0  输入密码redhat
+$ echo "Multiuser" >/mnt/multiuser/brian.txt  成功写入
+$ exit
+
+# su - rob
+$ cifscreds add server0
+$ echo "Multiuser" >/mnt/multiuser/rob.txt  写入失败
+$ cat /mnt/multiuser/brian.txt 读取成功
+$ exit
+
+10.
+安装nfs
+# yum install nfs-utils -y
+设定开机启动,并且马上启动
+# systemctl enable nfs-server
+# systemctl  start nfs-server
+创建public目录
+# mkdir /public
+# chown nfsnobody /public
+重载nfs
+# exportfs -r
+设置防火墙
+# firewall-cmd --permanent --add-service=nfs
+# firewall-cmd --reload
+下载kerberos的服务端密钥文件(考试的时候会提示你在哪里下载该文件)
+# wget -O /etc/krb5.keytab http://classroom.example.com/pub/keytabs/server0.keytab
+设定nfs的工作模式是4.2版本
+	作用:实现安全上下文的继承(服务端决定安全上下文,服务器和客户端是一致的上下文)
+# vim /etc/sysconfig/nfs
+RPCNFSDARGS="-V 4.2"
+设定服务开机启动
+# systemctl enable nfs-secure-server
+# systemctl start nfs-secure-server  <---注意:服务名字已经更改
+准备好共享的目录
+# mkdir -p /protected/project
+# chown ldapuser0:ldapuser0 /protected/project
+修改exports配置文件
+# vim /etc/exports
+/protected      *.example.com(sec=krb5p,rw) 注意：/protected必须放在前面
+/public       *.example.com(ro)
+		资源使用kerberos验证
+# exportfs -r
+# exportfs 验证
+设定防火墙,允许nfs的数据流入本机
+# firewall-cmd --permanent --add-service=nfs
+# firewall-cmd --reload
+
+11.
+创建挂载public的目录，修改fstab
+# mkdir /mnt/nfsmount
+# vim /etc/fstab
+...
+server0.example.com:/public  /mnt/nfsmount nfs defaults 0 0
+创建挂载protected的目录，下载密钥文件
+# mkdir /mnt/nfssecure
+# wget -O /etc/krb5.keytab http://classroom.example.com/pub/keytabs/desktop0.keytab
+开启nfs-secure服务
+# systemctl enable nfs-secure
+# systemctl  start nfs-secure
+修改fstab
+# vim /etc/fstab
+...
+server0.example.com:/protected    /mnt/nfssecure    nfs    defaults,sec=krb5p    0 0、
+挂载验证
+# mount -a
+# df -h | grep nfs
+...
+server0.example.com:/protected   10G  3.1G  7.0G   31% /mnt/nfssecure
+# ssh ldapuser0@localhost <--密码kerberos
+$ echo "new data" >> /mnt/nfssecure/project/testfile.txt
+
+12.
+安装httpd
+# yum install httpd -y
+# firewall-cmd --permanent --add-service=http
+# firewall-cmd --reload
+修改配置文件
+# vim /etc/httpd/conf.d/vhost-server0.conf
+<VirtualHost *:80>
+    ServerName server0.example.com
+    DocumentRoot "/var/www/html"
+    CustomLog "logs/server0_vhost_log" combined
+    <Directory "/var/www/html">
+    <RequireAll>
+        Require all granted
+        Require  not host .my133t.com
+    </RequireAll>
+    </Directory>
+</VirtualHost>
+下载测试页面
+# wget -O /var/www/html/index.html http://classroom.example.com/materials/station.html
+启动服务
+# systemctl enable httpd
+# systemctl start httpd
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
