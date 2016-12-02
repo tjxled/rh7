@@ -10,6 +10,7 @@ firewall-cmd --reload
 nm-connection-editor 手动修改ipv6地址
 nmcli connection reload
 nmcli connection up eth0
+ping6测试
 
 4.
 创建team类型的网卡，连接别名为team0,使用的模式为activebackup
@@ -26,7 +27,7 @@ ping 192.168.0.254
 
 5.
 vi /etc/bashrc
-alias qstat='/bin/ps -Ao pid,tt,fname,rsz'
+alias qstat='/bin/ps -Ao pid,tt,user,fname,rsz'
 source /etc/bashrc
 
 6.
@@ -119,6 +120,9 @@ $ exit
 创建public目录
 # mkdir /public
 # chown nfsnobody /public
+编辑erxports
+# vim /etc/exports
+/public       *.example.com(ro)
 重载nfs
 # exportfs -r
 设置防火墙
@@ -195,6 +199,244 @@ $ echo "new data" >> /mnt/nfssecure/project/testfile.txt
 # systemctl enable httpd
 # systemctl start httpd
 
+13.
+安装ssl，设置防火墙
+# yum -y install mod_ssl 
+# firewall-cmd --permanent --add-service=https
+# firewall-cmd --reload
+下载证书、秘钥
+# wget -O /etc/pki/tls/certs/server0.crt http://classroom.example.com/pub/tls/certs/server0.crt
+# wget -O /etc/pki/tls/private/server0.key http://classroom.example.com/pub/tls/private/server0.key 
+# wget -O /etc/pki/tls/certs/example-ca.crt http://classroom.example.com/pub/example-ca.crt
+修改配置文件(可以直接修改/etc/httpd/conf.d/ssl.conf)
+<VirtualHost _default_:443>
+DocumentRoot "/var/www/html"  自己添加
+ServerName server0.example.com:443 自己添加
+<Directory "/var/www/html">
+    <RequireAll>
+        Require all granted
+        Require  not host .my133t.com
+    </RequireAll>
+</Directory>
+... 
+SSLCertificateFile /etc/pki/tls/certs/server0.crt 修改为指定下载的证书
+SSLCertificateKeyFile /etc/pki/tls/private/server0.key 修改为指定下载的密钥
+SSLCACertificateFile /etc/pki/tls/certs/example-ca.crt 修改为指定的根证书
+</VirtualHost>(最后一行有)
+启动服务
+# systemctl enable httpd
+# systemctl restart httpd
+
+14.
+新建vhost-www0.conf文件
+# vim /etc/httpd/conf.d/vhost-www0.conf
+<VirtualHost *:80>
+    ServerName www0.example.com
+    DocumentRoot "/var/www/virtual"
+    <Directory "/var/www/virtual">
+        Require all granted 
+    </Directory>
+</VirtualHost>
+创建virtual目录并拷贝index.html文件
+# mkdir -p /var/www/virtual
+# wget -O /var/www/virtual/index.html http://classroom.example.com/materials/www.html
+设置virtual目录selinux上下文(可以先用ll -z /var/www/virtual检查是否为httpd_sys_content_t)
+# semanage fcontext -a -t httpd_sys_content_t '/var/www/virtual(/.*)?'
+# restorecon -R /var/www/virtual
+创建用户
+# useradd floyd  如果用户不存在就自己建立
+# setfacl -m user:floyd:rwx /var/www/virtual/
+重启服务
+# systemctl restart httpd
+
+15.
+创建private目录，下载index.html文件
+# mkdir -p /var/www/virtual/private
+# wget -O /var/www/virtual/private/index.html http://classroom.example.com/materials/private.html
+编辑vhost-www0.conf
+# vim /etc/httpd/conf.d/vhost-www0.conf
+<VirtualHost *:80>
+    ServerName www0.example.com
+    DocumentRoot "/var/www/virtual"
+    CustomLog "logs/www0_vhost_log" combined
+    <Directory "/var/www/virtual">
+        Require all granted 
+    </Directory>
+    <Directory "/var/www/virtual/private">  增加一段访问控制
+        Require all denied
+		Require local 
+    </Directory>
+</VirtualHost>
+重启服务
+# systemctl restart httpd
+
+16.
+安装mod_wsgi
+# yum install mod_wsgi -y
+创建webapp目录，下载脚本
+# mkdir -p /var/www/webapp
+# wget -O /var/www/webapp/webinfo.wsgi http://classroom.example.com/materials/webinfo.wsgi
+修改selinux上下文
+# semanage port -a -t http_port_t -p tcp 8908
+# semanage fcontext -a -t httpd_sys_content_t '/var/www/webapp(/.*)?'（可以先ll -Z查看）
+# restorecon -R /var/www/webapp
+新建vhost-webapp0.conf文件
+# vim /etc/httpd/conf.d/vhost-webapp0.conf
+Listen 8908
+<VirtualHost *:8908>
+    ServerName webapp0.example.com
+    DocumentRoot "/var/www/webapp"
+    <Directory "/var/www/webapp">
+        Require all granted 
+    </Directory>
+    WSGIScriptAlias /  /var/www/webapp/webinfo.wsgi
+</VirtualHost>
+重启httpd
+# systemctl restart httpd
+添加防火墙策略
+# firewall-cmd --permanent --add-rich-rule='rule family=ipv4 source address=172.25.0.0/24 port port=8908 protocol=tcp accept'
+# firewall-cmd --reload
+
+17.
+掌握if或case
+
+18.
+编写脚本
+shell> vim /root/batchusers
+#!/bin/bash
+if [ $# -eq 1 ];then
+        if [ -f "$1" ];then
+                while read username ;do
+                        useradd -s /bin/false $username &>/dev/null
+                done < $1
+        else
+                echo "Input file not found"
+                exit 1
+        fi
+else
+        echo "Usage: /root/barchusers userfile"
+        exit 2
+fi
+修改权限，下载用户名单userlist
+shell> chmod 755 /root/batchusers
+shell> wget -O /root/userlist http://classroom.example.com/materials/userlist
+
+19.
+安装服务
+# yum install targetcli -y
+# systemctl enable target
+# systemctl start target
+修改防火墙
+# firewall-cmd --permanent --add-port=3260/tcp
+# firewall-cmd --reload
+创建逻辑卷iscsi_store
+# fdisk /dev/vdb  <---记得修改类型为8e
+# pvcreate /dev/vdb1
+# vgcreate iSCSI_vg  /dev/vdb1
+# lvcreate -n iscsi_store -l 100%VG iSCSI_vg
+进入targetcli
+# targetcli
+/> cd iscsi
+/iscsi> create iqn.2014-11.com.example:server0  定义了一个iscsi(target)
+/iscsi> iqn.2014-11.com.example:server0/tpg1/portals create 172.25.0.11 3260
+		定义target的入口(客户使用什么IP和端口访问)
+
+iscsi> cd /
+/> backstores/block create name=server0.iscsi_store dev=/dev/iSCSI_vg/iscsi_store 
+		定义了一个本地的块设备
+
+
+/> iscsi/iqn.2014-11.com.example:server0/tpg1/luns create /backstores/block/server0.iscsi_store
+		把定义好了的块设备通过该target共享出去
+
+/> iscsi/iqn.2014-11.com.example:server0/tpg1/acls create iqn.2014-11.com.example:desktop0
+	创建基于iqn的acl:允许该名字的客户端访问本iscsi的tagert
+
+/> iscsi/iqn.2014-11.com.example:server0/tpg1/ set attribute authentication=0
+	该tgp关闭帐号验证
+/> iscsi/iqn.2014-11.com.example:server0/tpg1/ set attribute generate_node_acls=0
+	该tgp使用自定义的acl实现节点访问限制
+
+/> saveconfig  保存设置
+/> exit
+
+20.
+1)安装客户端软件包
+# yum install iscsi-initiator-utils -y
+
+2)配置iscsi客户端的名字，根据题目要求修改
+# vim /etc/iscsi/initiatorname.iscsi
+InitiatorName=iqn.2014-11.com.example:desktop0
+
+3)设定服务开机启动和马上启动
+# systemctl enable iscsi
+# systemctl start iscsi
+
+4)发现target
+# iscsiadm -m discovery -t st -p 172.25.0.11
+172.25.0.11:3260,1 iqn.2014-11.com.example:server0
+
+5)登陆target
+# iscsiadm -m node -l
+
+# lsblk
+NAME   MAJ:MIN RM  SIZE RO TYPE MOUNTPOINT
+sda      8:0    0  3G  0 disk   <----本地多了一个3G的硬盘
+vda    253:0    0   10G  0 disk 
+└─vda1 253:1    0   10G  0 part /
+vdb    253:16   0   10G  0 disk 
+
+分区并格式化
+# fdisk /dev/sda
+# mkfs.ext4 /dev/sda1
+
+配置开机自动挂载
+# mkdir /mnt/data
+
+根据题目要求，挂载的时候需要添加_netdev参数
+# blkid /dev/sda1
+/dev/sda1: UUID="ac8b190c-326f-44e5-a1a4-b220afec7fbf" TYPE="ext4"
+# vim /etc/fstab  
+...
+UUID="ac8b190c-326f-44e5-a1a4-b220afec7fbf"  /mnt/data	ext4 	defaults,_netdev	0 0
+
+# mount -a
+
+21.
+desktop# yum groupinstall mariadb-client -y 这个是可选,仅仅是在模拟考环境用于测试是否允许远程连接所用,考试的时候根据题目决定是否需要安装
+以下所有操作都是在server0上完成
+server0# yum groupinstall mariadb mariadb-client -y
+# systemctl enable mariadb 
+# systemctl start mariadb 
+# mysql_secure_installation 
+...
+Disallow root login remotely? [Y/n] y  题目要求禁止root远程登陆
+下载dump文件，复制库
+# wget -O /root/mariadb.dump http://content.example.com/courses/rhce/rhel7.0/materials/mariadb/mariadb.dump
+# mysql -uroot -proot_password
+MariaDB [(none)]> create database legacy;
+MariaDB [legacy]> use legacy;
+MariaDB [legacy]> source /root/mariadb.dump
+创建用户并授权
+MariaDB [(none)]> grant select on legacy.* to mary@'localhost' identified by 'mary_password';
+MariaDB [(none)]> grant select,insert,update,delete on legacy.* to legacy@'localhost' identified by 'legacy_password';
+MariaDB [(none)]> grant select on legacy.* to report@'localhost' identified by 'report_password';
+
+22.
+在legacy的数据库中查询：product表中name='RT-AC68U'的产品的id
+MariaDB [legacy]> select id from product where name='RT-AC68U';
++----+
+| id |
++----+
+|  3 |
++----+
+
+MariaDB [legacy]> select count(product.id) from category,product where category.name='Servers' and category.id=product.id_category;
++-------------------+
+| count(product.id) |
++-------------------+
+|                 2 |
++-------------------+
 
 
 
@@ -202,17 +444,4 @@ $ echo "new data" >> /mnt/nfssecure/project/testfile.txt
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+iptables -t nat -A PREROUTING -s 172.25.0.0/24 -p tcp --dport 5423 -j DNAT --to-destination:80
