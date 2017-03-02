@@ -22,3 +22,4 @@ gpgcheck=
 enabled=
 
 4.
+xfs_growfs /dev/vg/lvm
